@@ -1,5 +1,6 @@
 # Use an official Ubuntu base image
-FROM ubuntu:22.04 # You can use 'ubuntu:latest' or a specific version like 'ubuntu:20.04'
+FROM ubuntu:22.04
+ # You can use 'ubuntu:latest' or a specific version like 'ubuntu:20.04'
 
 # Set environment variable to avoid interactive prompts during apt-get operations
 ENV DEBIAN_FRONTEND=noninteractive
