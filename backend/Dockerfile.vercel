@@ -81,9 +81,7 @@ RUN echo 'export PS1="\u@vercel-shell:\w$ "' >> /root/.bashrc && \
     echo 'alias l="ls -CF"' >> /root/.bashrc && \
     # Copy to shelluser
     cp /root/.bashrc /home/shelluser/.bashrc && \
-    chown shelluser:shelluser /home/shelluser/.bashrcc && \
-    echo 'alias la="ls -A"' >> /root/.bashrc && \
-    echo 'alias l="ls -CF"' >> /root/.bashrc
+    chown shelluser:shelluser /home/shelluser/.bashrc
 
 # Set the working directory inside the container
 WORKDIR /app
