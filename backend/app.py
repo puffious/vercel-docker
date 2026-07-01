@@ -228,38 +228,70 @@ def start_tunnel():
             cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-R', '80:localhost:2222', 'serveo.net']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             
+            # Wait for tunnel URL from Serveo
+            tunnel_url = None
+            for i in range(30):  # Wait up to 30 seconds
+                if process.poll() is not None:
+                    break
+                try:
+                    # Read output to find the tunnel URL
+                    output = process.stdout.readline()
+                    if output and 'https://' in output:
+                        # Extract URL from Serveo output
+                        import re
+                        url_match = re.search(r'https://[a-zA-Z0-9.-]+\.serveo\.net', output)
+                        if url_match:
+                            tunnel_url = url_match.group(0)
+                            break
+                except:
+                    pass
+                time.sleep(1)
+            
         elif tunnel_type == 'serveo-custom':
             # Custom subdomain with serveo
             subdomain = data.get('subdomain', f'vercel-{uuid.uuid4().hex[:8]}')
             cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-R', f'{subdomain}:22:localhost:2222', 'serveo.net']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            tunnel_url = f'https://{subdomain}.serveo.net'
             
         elif tunnel_type == 'localtunnel':
             # Using localtunnel for HTTP tunnel, then SSH through it
             cmd = ['npx', 'localtunnel', '--port', '2222']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            tunnel_url = None  # Would need to parse localtunnel output
             
         elif tunnel_type == 'cloudflare':
             # Cloudflare tunnel (requires cloudflared)
             tunnel_name = data.get('tunnel_name', 'vercel-ssh')
             cmd = ['cloudflared', 'tunnel', '--url', 'ssh://localhost:2222']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            tunnel_url = None  # Would need to parse cloudflare output
             
         else:
             return jsonify({'error': 'Unsupported tunnel type'}), 400
         
-        tunnel_processes[tunnel_type] = process.pid
+        tunnel_processes[tunnel_type] = {
+            'pid': process.pid,
+            'process': process,
+            'url': tunnel_url
+        }
         
         # Start SSH server if not running
         start_ssh_server()
         
-        return jsonify({
+        response_data = {
             'success': True,
             'tunnel_type': tunnel_type,
             'pid': process.pid,
             'message': f'{tunnel_type} tunnel started',
             'ssh_port': 2222
-        })
+        }
+        
+        if tunnel_url:
+            response_data['tunnel_url'] = tunnel_url
+            response_data['ssh_command'] = f'ssh -p 22 root@{tunnel_url.replace("https://", "")}'
+        
+        return jsonify(response_data)
         
     except Exception as e:
         return jsonify({'error': f'Failed to start {tunnel_type} tunnel: {str(e)}'}), 500
@@ -274,8 +306,21 @@ def stop_tunnel():
         return jsonify({'error': f'No {tunnel_type} tunnel running'})
     
     try:
-        pid = tunnel_processes[tunnel_type]
-        os.kill(pid, signal.SIGTERM)
+        tunnel_info = tunnel_processes[tunnel_type]
+        # Handle both old (pid only) and new (dict with pid/process/url) formats
+        if isinstance(tunnel_info, dict):
+            pid = tunnel_info['pid']
+            process = tunnel_info.get('process')
+        else:
+            pid = tunnel_info
+            process = None
+        
+        # Try to terminate gracefully first
+        if process:
+            process.terminate()
+        else:
+            os.kill(pid, signal.SIGTERM)
+        
         del tunnel_processes[tunnel_type]
         
         return jsonify({
@@ -290,15 +335,26 @@ def tunnel_status():
     """Get status of all tunnels"""
     active_tunnels = {}
     
-    for tunnel_type, pid in tunnel_processes.items():
+    for tunnel_type, tunnel_info in list(tunnel_processes.items()):
         try:
+            # Handle both old (pid only) and new (dict with pid/process/url) formats
+            if isinstance(tunnel_info, dict):
+                pid = tunnel_info['pid']
+                tunnel_url = tunnel_info.get('url')
+            else:
+                pid = tunnel_info
+                tunnel_url = None
+            
             # Check if process is still running
             os.kill(pid, 0)
-            active_tunnels[tunnel_type] = {'pid': pid, 'status': 'running'}
+            tunnel_data = {'pid': pid, 'status': 'running'}
+            if tunnel_url:
+                tunnel_data['url'] = tunnel_url
+                tunnel_data['ssh_command'] = f'ssh -p 22 root@{tunnel_url.replace("https://", "")}'
+            active_tunnels[tunnel_type] = tunnel_data
         except OSError:
             # Process not running, remove from dict
             del tunnel_processes[tunnel_type]
-            active_tunnels[tunnel_type] = {'status': 'stopped'}
     
     return jsonify({
         'active_tunnels': active_tunnels,
