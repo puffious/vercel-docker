@@ -245,8 +245,8 @@ def start_tunnel():
                 try:
                     for line in iter(process.stdout.readline, ''):
                         if line:
-                            print(f\"Serveo output: {line.strip()}\")
-                            # Look for \"Forwarding HTTP traffic from https://xxx.serveousercontent.com\"
+                            print(f"Serveo output: {line.strip()}")
+                            # Look for "Forwarding HTTP traffic from https://xxx.serveousercontent.com"
                             import re
                             url_match = re.search(r'https://([a-zA-Z0-9.-]+)', line)
                             if url_match:
@@ -258,10 +258,10 @@ def start_tunnel():
                                     tunnel_processes[tunnel_type]['url'] = tunnel_url
                                     tunnel_processes[tunnel_type]['host'] = tunnel_host
                                     tunnel_processes[tunnel_type]['status'] = 'connected'
-                                    print(f\"Tunnel established: {tunnel_url}\")
+                                    print(f"Tunnel established: {tunnel_url}")
                                 break
                 except Exception as e:
-                    print(f\"Error parsing Serveo output: {e}\")
+                    print(f"Error parsing Serveo output: {e}")
             
             import threading
             threading.Thread(target=parse_serveo_output, daemon=True).start()
