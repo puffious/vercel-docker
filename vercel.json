@@ -14,6 +14,14 @@
       "destination": { "service": "backend" }
     },
     {
+      "source": "/shell/(.*)",
+      "destination": { "service": "backend" }
+    },
+    {
+      "source": "/info",
+      "destination": { "service": "backend" }
+    },
+    {
       "source": "/(.*)",
       "destination": { "service": "frontend" }
     }

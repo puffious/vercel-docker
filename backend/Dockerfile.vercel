@@ -1,22 +1,92 @@
-# Use an official Ubuntu base image
+# Use an official Ubuntu base image with more development tools
 FROM ubuntu:22.04
- # You can use 'ubuntu:latest' or a specific version like 'ubuntu:20.04'
 
 # Set environment variable to avoid interactive prompts during apt-get operations
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Update package lists and install necessary packages:
-# - python3 and python3-pip for our Flask application
-# - lsb-release to easily get Ubuntu version info for our POC
-# - curl for potential debugging (optional)
+# Update package lists and install comprehensive packages for a proper shell environment
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        # Core Python and web server
         python3 \
         python3-pip \
+        # SSH Server and networking
+        openssh-server \
+        openssh-client \
+        # System info and utilities
         lsb-release \
-        curl && \
+        curl \
+        wget \
+        # Development tools
+        git \
+        vim \
+        nano \
+        htop \
+        tree \
+        # Shell utilities
+        bash-completion \
+        tmux \
+        screen \
+        # Network tools  
+        net-tools \
+        iputils-ping \
+        netcat \
+        socat \
+        # File utilities
+        zip \
+        unzip \
+        tar \
+        # Build essentials
+        build-essential \
+        gcc \
+        g++ \
+        make \
+        # Text processing
+        grep \
+        sed \
+        awk \
+        # System monitoring
+        procps \
+        psmisc \
+        # Additional tunnel tools
+        autossh && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Configure SSH server
+RUN mkdir /var/run/sshd && \
+    # Create SSH host keys
+    ssh-keygen -A && \
+    # Configure SSH for container use
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#Port 22/Port 2222/' /etc/ssh/sshd_config && \
+    # Allow SSH forwarding
+    echo 'GatewayPorts yes' >> /etc/ssh/sshd_config && \
+    echo 'AllowTcpForwarding yes' >> /etc/ssh/sshd_config && \
+    echo 'X11Forwarding yes' >> /etc/ssh/sshd_config
+
+# Set up users and SSH access
+RUN # Set root password (change this!)
+    echo 'root:vercel123' | chpasswd && \
+    # Create a regular user
+    useradd -m -s /bin/bash -G sudo shelluser && \
+    echo 'shelluser:shell123' | chpasswd && \
+    # Set up SSH keys directory
+    mkdir -p /root/.ssh /home/shelluser/.ssh && \
+    chmod 700 /root/.ssh /home/shelluser/.ssh
+
+# Set up a proper shell environment
+RUN echo 'export PS1="\u@vercel-shell:\w$ "' >> /root/.bashrc && \
+    echo 'alias ls="ls --color=auto"' >> /root/.bashrc && \
+    echo 'alias ll="ls -alF"' >> /root/.bashrc && \
+    echo 'alias la="ls -A"' >> /root/.bashrc && \
+    echo 'alias l="ls -CF"' >> /root/.bashrc && \
+    # Copy to shelluser
+    cp /root/.bashrc /home/shelluser/.bashrc && \
+    chown shelluser:shelluser /home/shelluser/.bashrcc && \
+    echo 'alias la="ls -A"' >> /root/.bashrc && \
+    echo 'alias l="ls -CF"' >> /root/.bashrc
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -25,14 +95,28 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
+# Install additional tunnel tools
+RUN # Install Node.js for localtunnel
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs && \
+    # Install cloudflared (optional)
+    wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && \
+    dpkg -i cloudflared-linux-amd64.deb || apt-get install -f -y && \
+    rm cloudflared-linux-amd64.deb
+
 # Copy the application code into the container
 COPY . .
 
-# Vercel Functions expect your application to listen on a specific port.
-# By default, this is 80. You can override it with the PORT environment variable.
-# EXPOSE 80 is good practice but not strictly required for Vercel to route traffic.
-EXPOSE 80
+# Create startup script
+RUN echo '#!/bin/bash\n\
+# Start SSH server\n\
+/usr/sbin/sshd -p 2222\n\
+# Start Flask app\n\
+python3 app.py' > /app/start.sh && \
+    chmod +x /app/start.sh
 
-# Command to run your application when the container starts.
-# This MUST be a command that starts an HTTP server.
-CMD ["python3", "app.py"]
+# Expose ports (HTTP and SSH)
+EXPOSE 80 2222
+
+# Command to run your application when the container starts
+CMD ["/app/start.sh"]

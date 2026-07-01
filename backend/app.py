@@ -1,8 +1,25 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session
+from flask_socketio import SocketIO, emit
 import os
 import subprocess
+import uuid
+import threading
+import time
+import signal
+import shlex
+from collections import defaultdict, deque
+import json
+import asyncio
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-change-in-production')
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Session storage for persistent shell sessions
+sessions = {}
+command_history = defaultdict(lambda: deque(maxlen=1000))
+running_processes = {}
+tunnel_processes = {}
 
 @app.route('/')
 def home():
@@ -28,6 +45,98 @@ def info():
         "env_vars": dict(os.environ)
     })
 
+class ShellSession:
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.cwd = os.path.expanduser('~')
+        self.env = dict(os.environ)
+        self.env['PS1'] = f'\u@vercel-shell:\w$ '
+        self.history = deque(maxlen=1000)
+        self.last_activity = time.time()
+        
+    def execute_command(self, command):
+        self.last_activity = time.time()
+        self.history.append(command)
+        
+        # Handle built-in commands
+        if command.strip() == 'clear':
+            return {'stdout': '\033[2J\033[H', 'stderr': '', 'return_code': 0}
+        
+        if command.strip().startswith('cd '):
+            return self._handle_cd(command)
+        
+        if command.strip() == 'pwd':
+            return {'stdout': self.cwd, 'stderr': '', 'return_code': 0}
+        
+        if command.strip() == 'history':
+            history_output = '\n'.join([f'{i+1:4d}  {cmd}' for i, cmd in enumerate(self.history)])
+            return {'stdout': history_output, 'stderr': '', 'return_code': 0}
+        
+        # Execute external commands
+        try:
+            process = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=self.cwd,
+                env=self.env
+            )
+            
+            # Update cwd if command might have changed it
+            if any(cmd in command for cmd in ['cd', 'pushd', 'popd']):
+                try:
+                    result = subprocess.run('pwd', shell=True, capture_output=True, text=True, cwd=self.cwd)
+                    if result.returncode == 0:
+                        self.cwd = result.stdout.strip()
+                except:
+                    pass
+            
+            return {
+                'stdout': process.stdout,
+                'stderr': process.stderr,
+                'return_code': process.returncode
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                'error': 'Command timed out (30s limit)',
+                'stdout': '',
+                'stderr': '',
+                'return_code': 124
+            }
+        except Exception as e:
+            return {
+                'error': f'Execution error: {str(e)}',
+                'stdout': '',
+                'stderr': '',
+                'return_code': 1
+            }
+    
+    def _handle_cd(self, command):
+        parts = shlex.split(command.strip())
+        if len(parts) == 1:  # just 'cd'
+            target = os.path.expanduser('~')
+        else:
+            target = parts[1]
+        
+        target = os.path.expanduser(target)
+        if not os.path.isabs(target):
+            target = os.path.join(self.cwd, target)
+        
+        target = os.path.normpath(target)
+        
+        if os.path.isdir(target):
+            self.cwd = target
+            return {'stdout': '', 'stderr': '', 'return_code': 0}
+        else:
+            return {'stdout': '', 'stderr': f'cd: {target}: No such file or directory', 'return_code': 1}
+    
+    def get_prompt(self):
+        username = self.env.get('USER', 'user')
+        short_cwd = self.cwd.replace(os.path.expanduser('~'), '~')
+        return f'{username}@vercel-shell:{short_cwd}$ '
+
 @app.route('/shell', methods=['POST'])
 def shell_executor():
     if not request.is_json:
@@ -35,41 +144,198 @@ def shell_executor():
 
     data = request.get_json()
     command = data.get('command')
+    session_id = data.get('session_id')
 
     if not command:
         return jsonify({"error": "No command provided"}), 400
+    
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    
+    # Get or create session
+    if session_id not in sessions:
+        sessions[session_id] = ShellSession(session_id)
+    
+    shell_session = sessions[session_id]
+    result = shell_session.execute_command(command)
+    
+    # Add session info to response
+    result['session_id'] = session_id
+    result['prompt'] = shell_session.get_prompt()
+    result['cwd'] = shell_session.cwd
+    
+    return jsonify(result)
 
-    # --- SECURITY WARNING ---
-    # Running arbitrary commands from user input is EXTREMELY DANGEROUS.
-    # For a real application, you must sanitize input,
-    # whitelist commands, or prevent direct execution.
-    # This POC uses shell=True for simplicity, but it's risky.
-    # --- END SECURITY WARNING ---
-
+@app.route('/shell/autocomplete', methods=['POST'])
+def autocomplete():
+    data = request.get_json()
+    partial_command = data.get('command', '')
+    session_id = data.get('session_id')
+    
+    if session_id not in sessions:
+        return jsonify({'suggestions': []})
+    
+    shell_session = sessions[session_id]
+    
     try:
-        process = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        # Simple file/directory completion
+        if ' ' not in partial_command.strip():
+            # Command completion
+            result = subprocess.run(
+                f'compgen -c {partial_command}',
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=shell_session.cwd
+            )
+            suggestions = result.stdout.strip().split('\n')[:10] if result.stdout.strip() else []
+        else:
+            # File completion for last argument
+            parts = shlex.split(partial_command)
+            last_part = parts[-1] if parts else ''
+            
+            result = subprocess.run(
+                f'compgen -f {last_part}',
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=shell_session.cwd
+            )
+            suggestions = result.stdout.strip().split('\n')[:10] if result.stdout.strip() else []
+        
+        return jsonify({'suggestions': [s for s in suggestions if s]})
+    except:
+        return jsonify({'suggestions': []})
+
+@app.route('/shell/history', methods=['GET'])
+def get_history():
+    session_id = request.args.get('session_id')
+    if session_id not in sessions:
+        return jsonify({'history': []})
+    
+@app.route('/tunnel/start', methods=['POST'])
+def start_tunnel():
+    """Start various types of reverse tunnels for SSH access"""
+    data = request.get_json()
+    tunnel_type = data.get('type', 'serveo')  # serveo, ngrok, cloudflare, localtunnel
+    
+    if tunnel_type in tunnel_processes:
+        return jsonify({'error': f'{tunnel_type} tunnel already running', 'pid': tunnel_processes[tunnel_type]})
+    
+    try:
+        if tunnel_type == 'serveo':
+            # Serveo.net reverse SSH tunnel
+            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-R', '80:localhost:2222', 'serveo.net']
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            
+        elif tunnel_type == 'serveo-custom':
+            # Custom subdomain with serveo
+            subdomain = data.get('subdomain', f'vercel-{uuid.uuid4().hex[:8]}')
+            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-R', f'{subdomain}:22:localhost:2222', 'serveo.net']
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            
+        elif tunnel_type == 'localtunnel':
+            # Using localtunnel for HTTP tunnel, then SSH through it
+            cmd = ['npx', 'localtunnel', '--port', '2222']
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            
+        elif tunnel_type == 'cloudflare':
+            # Cloudflare tunnel (requires cloudflared)
+            tunnel_name = data.get('tunnel_name', 'vercel-ssh')
+            cmd = ['cloudflared', 'tunnel', '--url', 'ssh://localhost:2222']
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            
+        else:
+            return jsonify({'error': 'Unsupported tunnel type'}), 400
+        
+        tunnel_processes[tunnel_type] = process.pid
+        
+        # Start SSH server if not running
+        start_ssh_server()
+        
         return jsonify({
-            "command": command,
-            "stdout": process.stdout.strip(),
-            "stderr": process.stderr.strip(),
-            "return_code": process.returncode
+            'success': True,
+            'tunnel_type': tunnel_type,
+            'pid': process.pid,
+            'message': f'{tunnel_type} tunnel started',
+            'ssh_port': 2222
         })
-    except subprocess.TimeoutExpired:
-        return jsonify({
-            "error": "Command timed out",
-            "command": command
-        }), 408
+        
     except Exception as e:
+        return jsonify({'error': f'Failed to start {tunnel_type} tunnel: {str(e)}'}), 500
+
+@app.route('/tunnel/stop', methods=['POST'])
+def stop_tunnel():
+    """Stop a running tunnel"""
+    data = request.get_json()
+    tunnel_type = data.get('type')
+    
+    if tunnel_type not in tunnel_processes:
+        return jsonify({'error': f'No {tunnel_type} tunnel running'})
+    
+    try:
+        pid = tunnel_processes[tunnel_type]
+        os.kill(pid, signal.SIGTERM)
+        del tunnel_processes[tunnel_type]
+        
         return jsonify({
-            "error": f"An unexpected error occurred: {str(e)}",
-            "command": command
-        }), 500
+            'success': True,
+            'message': f'{tunnel_type} tunnel stopped'
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to stop tunnel: {str(e)}'}), 500
+
+@app.route('/tunnel/status')
+def tunnel_status():
+    """Get status of all tunnels"""
+    active_tunnels = {}
+    
+    for tunnel_type, pid in tunnel_processes.items():
+        try:
+            # Check if process is still running
+            os.kill(pid, 0)
+            active_tunnels[tunnel_type] = {'pid': pid, 'status': 'running'}
+        except OSError:
+            # Process not running, remove from dict
+            del tunnel_processes[tunnel_type]
+            active_tunnels[tunnel_type] = {'status': 'stopped'}
+    
+    return jsonify({
+        'active_tunnels': active_tunnels,
+        'ssh_server_port': 2222,
+        'available_types': ['serveo', 'serveo-custom', 'localtunnel', 'cloudflare']
+    })
+
+def start_ssh_server():
+    """Start SSH server if not already running"""
+    try:
+        # Check if SSH server is running
+        result = subprocess.run(['pgrep', 'sshd'], capture_output=True)
+        if result.returncode != 0:
+            # Start SSH server
+            subprocess.Popen(['/usr/sbin/sshd', '-D', '-p', '2222'], 
+                           stdout=subprocess.DEVNULL, 
+                           stderr=subprocess.DEVNULL)
+            time.sleep(1)  # Give it time to start
+    except Exception as e:
+        print(f"Error starting SSH server: {e}")
+
+@app.route('/ssh/info')
+def ssh_info():
+    """Get SSH connection information"""
+    return jsonify({
+        'ssh_port': 2222,
+        'users': {
+            'root': 'vercel123',
+            'shelluser': 'shell123'
+        },
+        'connection_examples': {
+            'direct': 'ssh -p 2222 root@<tunnel-url>',
+            'with_key': 'ssh -p 2222 -i ~/.ssh/id_rsa root@<tunnel-url>',
+            'port_forward': 'ssh -p 2222 -L 8080:localhost:80 root@<tunnel-url>'
+        },
+        'security_note': 'Change default passwords in production!'
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 80))
