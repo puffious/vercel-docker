@@ -224,35 +224,64 @@ def start_tunnel():
     
     try:
         if tunnel_type == 'serveo':
-            # Serveo.net reverse SSH tunnel
-            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-R', '80:localhost:2222', 'serveo.net']
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # Serveo.net reverse SSH tunnel - map remote port 22 to local SSH port 2222
+            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', 
+                   '-R', '0:localhost:2222', 'serveo.net']
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                                     text=True, bufsize=1, universal_newlines=True)
             
             # Wait for tunnel URL from Serveo
             tunnel_url = None
-            for i in range(30):  # Wait up to 30 seconds
+            tunnel_host = None
+            tunnel_port = None
+            
+            for i in range(60):  # Wait up to 60 seconds
                 if process.poll() is not None:
                     break
                 try:
-                    # Read output to find the tunnel URL
-                    output = process.stdout.readline()
-                    if output and 'https://' in output:
-                        # Extract URL from Serveo output
+                    # Read output line by line
+                    line = process.stdout.readline()
+                    if line:
+                        print(f"Serveo output: {line.strip()}")
+                        # Look for forwarding info like "Forwarding SSH traffic from https://abc123.serveo.net"
+                        # Or "ssh://serveo.net:12345" format
                         import re
-                        url_match = re.search(r'https://[a-zA-Z0-9.-]+\.serveo\.net', output)
+                        
+                        # Pattern 1: "Forwarding SSH traffic from https://xxx.serveo.net"
+                        url_match = re.search(r'https://([a-zA-Z0-9.-]+\.serveo\.net)', line)
                         if url_match:
+                            tunnel_host = url_match.group(1)
                             tunnel_url = url_match.group(0)
                             break
-                except:
-                    pass
-                time.sleep(1)
+                            
+                        # Pattern 2: "tcp://serveo.net:port" or similar
+                        tcp_match = re.search(r'tcp://serveo\.net:(\d+)', line)
+                        if tcp_match:
+                            tunnel_port = tcp_match.group(1)
+                            tunnel_host = 'serveo.net'
+                            tunnel_url = f'ssh://serveo.net:{tunnel_port}'
+                            break
+                            
+                        # Pattern 3: Direct port assignment
+                        port_match = re.search(r'Allocated port (\d+) for', line)
+                        if port_match:
+                            tunnel_port = port_match.group(1)
+                            tunnel_host = 'serveo.net'
+                            tunnel_url = f'ssh://serveo.net:{tunnel_port}'
+                            break
+                except Exception as e:
+                    print(f"Error reading Serveo output: {e}")
+                time.sleep(0.5)
             
         elif tunnel_type == 'serveo-custom':
             # Custom subdomain with serveo
             subdomain = data.get('subdomain', f'vercel-{uuid.uuid4().hex[:8]}')
-            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-R', f'{subdomain}:22:localhost:2222', 'serveo.net']
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            tunnel_url = f'https://{subdomain}.serveo.net'
+            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
+                   '-R', f'{subdomain}:22:localhost:2222', 'serveo.net']
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            tunnel_url = f'ssh://{subdomain}.serveo.net:22'
+            tunnel_host = f'{subdomain}.serveo.net'
+            tunnel_port = '22'
             
         elif tunnel_type == 'localtunnel':
             # Using localtunnel for HTTP tunnel, then SSH through it
@@ -273,7 +302,9 @@ def start_tunnel():
         tunnel_processes[tunnel_type] = {
             'pid': process.pid,
             'process': process,
-            'url': tunnel_url
+            'url': tunnel_url,
+            'host': tunnel_host,
+            'port': tunnel_port
         }
         
         # Start SSH server if not running
@@ -287,9 +318,16 @@ def start_tunnel():
             'ssh_port': 2222
         }
         
-        if tunnel_url:
+        if tunnel_url and tunnel_host:
             response_data['tunnel_url'] = tunnel_url
-            response_data['ssh_command'] = f'ssh -p 22 root@{tunnel_url.replace("https://", "")}'
+            response_data['tunnel_host'] = tunnel_host
+            if tunnel_port:
+                response_data['tunnel_port'] = tunnel_port
+                response_data['ssh_command'] = f'ssh -p {tunnel_port} root@{tunnel_host}'
+            else:
+                response_data['ssh_command'] = f'ssh root@{tunnel_host}'
+        elif not tunnel_url:
+            response_data['warning'] = 'Tunnel started but URL not detected. Check logs.'
         
         return jsonify(response_data)
         
@@ -341,16 +379,26 @@ def tunnel_status():
             if isinstance(tunnel_info, dict):
                 pid = tunnel_info['pid']
                 tunnel_url = tunnel_info.get('url')
+                tunnel_host = tunnel_info.get('host')
+                tunnel_port = tunnel_info.get('port')
             else:
                 pid = tunnel_info
                 tunnel_url = None
+                tunnel_host = None
+                tunnel_port = None
             
             # Check if process is still running
             os.kill(pid, 0)
             tunnel_data = {'pid': pid, 'status': 'running'}
             if tunnel_url:
                 tunnel_data['url'] = tunnel_url
-                tunnel_data['ssh_command'] = f'ssh -p 22 root@{tunnel_url.replace("https://", "")}'
+            if tunnel_host:
+                tunnel_data['host'] = tunnel_host
+                if tunnel_port:
+                    tunnel_data['port'] = tunnel_port
+                    tunnel_data['ssh_command'] = f'ssh -p {tunnel_port} root@{tunnel_host}'
+                else:
+                    tunnel_data['ssh_command'] = f'ssh root@{tunnel_host}'
             active_tunnels[tunnel_type] = tunnel_data
         except OSError:
             # Process not running, remove from dict
