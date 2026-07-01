@@ -224,9 +224,9 @@ def start_tunnel():
     
     try:
         if tunnel_type == 'serveo':
-            # Serveo.net reverse SSH tunnel - map remote port 80 to local SSH port 2222
+            # Serveo.net reverse SSH tunnel - map random SSH port to local SSH port 2222
             cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', 
-                   '-R', '80:localhost:2222', 'serveo.net']
+                   '-R', '0:localhost:2222', 'serveo.net']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
                                      text=True, bufsize=1, universal_newlines=True)
             
@@ -246,19 +246,39 @@ def start_tunnel():
                     for line in iter(process.stdout.readline, ''):
                         if line:
                             print(f"Serveo output: {line.strip()}")
-                            # Look for "Forwarding HTTP traffic from https://xxx.serveousercontent.com"
+                            # Look for SSH port assignment like "Allocated port 12345 for connection"
                             import re
-                            url_match = re.search(r'https://([a-zA-Z0-9.-]+)', line)
-                            if url_match:
-                                tunnel_url = url_match.group(0)
-                                tunnel_host = url_match.group(1)
+                            
+                            # Pattern 1: "Allocated port XXXXX for"
+                            port_match = re.search(r'Allocated port (\d+)', line)
+                            if port_match:
+                                tunnel_port = port_match.group(1)
+                                tunnel_host = 'serveo.net'
+                                tunnel_url = f'ssh://serveo.net:{tunnel_port}'
                                 
                                 # Update tunnel info
                                 if tunnel_type in tunnel_processes:
                                     tunnel_processes[tunnel_type]['url'] = tunnel_url
                                     tunnel_processes[tunnel_type]['host'] = tunnel_host
+                                    tunnel_processes[tunnel_type]['port'] = tunnel_port
                                     tunnel_processes[tunnel_type]['status'] = 'connected'
-                                    print(f"Tunnel established: {tunnel_url}")
+                                    print(f"SSH tunnel established: ssh -p {tunnel_port} root@serveo.net")
+                                break
+                                
+                            # Pattern 2: "Forwarding SSH traffic from ssh://serveo.net:XXXXX"
+                            ssh_match = re.search(r'ssh://serveo\.net:(\d+)', line)
+                            if ssh_match:
+                                tunnel_port = ssh_match.group(1)
+                                tunnel_host = 'serveo.net'
+                                tunnel_url = f'ssh://serveo.net:{tunnel_port}'
+                                
+                                # Update tunnel info
+                                if tunnel_type in tunnel_processes:
+                                    tunnel_processes[tunnel_type]['url'] = tunnel_url
+                                    tunnel_processes[tunnel_type]['host'] = tunnel_host
+                                    tunnel_processes[tunnel_type]['port'] = tunnel_port
+                                    tunnel_processes[tunnel_type]['status'] = 'connected'
+                                    print(f"SSH tunnel established: ssh -p {tunnel_port} root@serveo.net")
                                 break
                 except Exception as e:
                     print(f"Error parsing Serveo output: {e}")
@@ -389,8 +409,12 @@ def tunnel_status():
                 if tunnel_port:
                     tunnel_data['port'] = tunnel_port
                     tunnel_data['ssh_command'] = f'ssh -p {tunnel_port} root@{tunnel_host}'
+                    tunnel_data['ssh_with_key'] = f'ssh -p {tunnel_port} -i ~/.ssh/id_ed25519 root@{tunnel_host}'
+                    tunnel_data['ssh_shelluser'] = f'ssh -p {tunnel_port} shelluser@{tunnel_host}'
                 else:
                     tunnel_data['ssh_command'] = f'ssh root@{tunnel_host}'
+                    tunnel_data['ssh_with_key'] = f'ssh -i ~/.ssh/id_ed25519 root@{tunnel_host}'
+                    tunnel_data['ssh_shelluser'] = f'ssh shelluser@{tunnel_host}'
             active_tunnels[tunnel_type] = tunnel_data
         except OSError:
             # Process not running, remove from dict

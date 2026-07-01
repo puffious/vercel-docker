@@ -73,6 +73,12 @@ RUN echo 'root:vercel123' | chpasswd && \
     mkdir -p /root/.ssh /home/shelluser/.ssh && \
     chmod 700 /root/.ssh /home/shelluser/.ssh
 
+# Add your SSH public key for key-based authentication
+RUN echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKhTHe+LnlKzs2rv3q1ePT7APGJHYIQR3rRy5w30iBoo sv' > /root/.ssh/authorized_keys && \
+    echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKhTHe+LnlKzs2rv3q1ePT7APGJHYIQR3rRy5w30iBoo sv' > /home/shelluser/.ssh/authorized_keys && \
+    chmod 600 /root/.ssh/authorized_keys /home/shelluser/.ssh/authorized_keys && \
+    chown shelluser:shelluser /home/shelluser/.ssh/authorized_keys
+
 # Set up a proper shell environment
 RUN echo 'export PS1="\u@vercel-shell:\w$ "' >> /root/.bashrc && \
     echo 'alias ls="ls --color=auto"' >> /root/.bashrc && \
