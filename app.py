@@ -2,7 +2,8 @@ from flask import Flask, jsonify
 import os
 import subprocess
 
-app = Flask(__Flask__)
+# Corrected: Use __name__ to initialize the Flask app
+app = Flask(__name__)
 
 @app.route('/')
 def home():
