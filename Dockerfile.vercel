@@ -1,0 +1,37 @@
+# Use an official Ubuntu base image
+FROM ubuntu:22.04 # You can use 'ubuntu:latest' or a specific version like 'ubuntu:20.04'
+
+# Set environment variable to avoid interactive prompts during apt-get operations
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Update package lists and install necessary packages:
+# - python3 and python3-pip for our Flask application
+# - lsb-release to easily get Ubuntu version info for our POC
+# - curl for potential debugging (optional)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        lsb-release \
+        curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy the Python requirements file and install them
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy the application code into the container
+COPY . .
+
+# Vercel Functions expect your application to listen on a specific port.
+# By default, this is 80. You can override it with the PORT environment variable.
+# EXPOSE 80 is good practice but not strictly required for Vercel to route traffic.
+EXPOSE 80
+
+# Command to run your application when the container starts.
+# This MUST be a command that starts an HTTP server.
+CMD ["python3", "app.py"]
