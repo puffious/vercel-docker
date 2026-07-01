@@ -50,7 +50,7 @@ class ShellSession:
         self.session_id = session_id
         self.cwd = os.path.expanduser('~')
         self.env = dict(os.environ)
-        self.env['PS1'] = f'\u@vercel-shell:\w$ '
+        self.env['PS1'] = r'\u@vercel-shell:\w$ '
         self.history = deque(maxlen=1000)
         self.last_activity = time.time()
         
@@ -340,4 +340,12 @@ def ssh_info():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 80))
     print(f"Flask app starting on 0.0.0.0:{port}")
-    app.run(host='0.0.0.0', port=port)
+    
+    # Start SSH server in background
+    try:
+        start_ssh_server()
+        print("SSH server started on port 2222")
+    except Exception as e:
+        print(f"Warning: Could not start SSH server: {e}")
+    
+    app.run(host='0.0.0.0', port=port, debug=False)

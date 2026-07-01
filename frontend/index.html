@@ -76,18 +76,13 @@
             background: #28ca42;
         }
 
-        .control-btn:hover {
-            transform: scale(1.1);
-            box-shadow: 0 0 10px currentColor;
-        }
-
         .terminal-title {
             font-size: 14px;
             font-weight: 600;
             color: #ccc;
             text-align: center;
             flex-grow: 1;
-            margin-left: -60px; /* Center accounting for controls */
+            margin-left: -60px;
         }
 
         .terminal-body {
@@ -108,23 +103,6 @@
             word-wrap: break-word;
         }
 
-        .terminal-output::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .terminal-output::-webkit-scrollbar-track {
-            background: #111;
-        }
-
-        .terminal-output::-webkit-scrollbar-thumb {
-            background: #333;
-            border-radius: 4px;
-        }
-
-        .terminal-output::-webkit-scrollbar-thumb:hover {
-            background: #444;
-        }
-
         .terminal-line {
             margin-bottom: 2px;
         }
@@ -143,18 +121,6 @@
 
         .terminal-welcome {
             color: #64b5f6;
-        }
-
-        .terminal-suggestion {
-            color: #ffd54f;
-            background: rgba(255, 213, 79, 0.1);
-            padding: 4px 8px;
-            border-radius: 4px;
-            margin: 4px 0;
-        }
-
-        .terminal-control {
-            color: #ff8a65;
         }
 
         .terminal-input-line {
@@ -185,38 +151,6 @@
             caret-color: #00ff88;
         }
 
-        .terminal-input::selection {
-            background: rgba(0, 255, 136, 0.3);
-        }
-
-        /* Loading indicator */
-        .terminal-loading {
-            display: none;
-            position: absolute;
-            top: 50%;
-            right: 20px;
-            transform: translateY(-50%);
-        }
-
-        .terminal-loading.active {
-            display: block;
-        }
-
-        .loading-spinner {
-            width: 16px;
-            height: 16px;
-            border: 2px solid #333;
-            border-top: 2px solid #00ff88;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* Responsive design */
         @media (max-width: 768px) {
             body {
                 padding: 10px;
@@ -226,68 +160,20 @@
                 height: 95vh;
                 border-radius: 8px;
             }
-            
-            .terminal-output {
-                font-size: 12px;
-                padding: 12px;
-            }
-            
-            .terminal-input-line {
-                padding: 10px 12px;
-            }
-            
-            .terminal-input {
-                font-size: 16px; /* Prevent zoom on iOS */
-            }
         }
+    </style>
+</head>
+<body>
+    <div id="terminal-container">
+        <div class="status-indicator"></div>
+        <div class="terminal-loading">
+            <div class="loading-spinner"></div>
+        </div>
+    </div>
 
-        /* Accessibility improvements */
-        @media (prefers-reduced-motion: reduce) {
-            .control-btn {
-                transition: none;
-            }
-            
-            .loading-spinner {
-                animation: none;
-                border: 2px solid #00ff88;
-            }
-        }
-
-        /* High contrast mode support */
-        @media (prefers-contrast: high) {
-            .terminal-output {
-                color: #00ff00;
-            }
-            
-            .terminal-error {
-                color: #ff0000;
-            }
-            
-            .terminal-prompt {
-                color: #00ff00;
-                text-shadow: none;
-            }
-        }
-
-        /* Terminal cursor animation */
-        .terminal-input:focus + .terminal-cursor {
-            animation: blink 1s infinite;
-        }
-
-        @keyframes blink {
-            0%, 50% { opacity: 1; }
-            51%, 100% { opacity: 0; }
-        }
-
-        /* Status indicator */
-        .status-indicator {
-            position: absolute;
-            top: 12px;
-            right: 16px;
-            width: 8px;
-            height: 8px;
-            background: #28ca42;
-            border-radius: 50%;
+    <script src="terminal.js"></script>
+</body>
+</html>
             box-shadow: 0 0 10px #28ca42;
         }
 
