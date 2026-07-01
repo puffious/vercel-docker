@@ -217,7 +217,7 @@ def get_history():
 def start_tunnel():
     """Start various types of reverse tunnels for SSH access"""
     data = request.get_json()
-    tunnel_type = data.get('type', 'serveo')  # serveo, ngrok, cloudflare, localtunnel
+    tunnel_type = data.get('type', 'serveo-custom')  # Use custom subdomain by default
     
     if tunnel_type in tunnel_processes:
         return jsonify({'error': f'{tunnel_type} tunnel already running', 'pid': tunnel_processes[tunnel_type]})
@@ -255,8 +255,8 @@ def start_tunnel():
             })
             
         elif tunnel_type == 'serveo-custom':
-            # Custom subdomain with serveo
-            subdomain = data.get('subdomain', f'vercel-{uuid.uuid4().hex[:8]}')
+            # Custom subdomain with serveo - use consistent subdomain
+            subdomain = data.get('subdomain', 'vercel-docker-ssh')  # Fixed subdomain
             cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/dev/null',
                    '-R', f'{subdomain}:22:localhost:2222', 'serveo.net']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
