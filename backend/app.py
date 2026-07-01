@@ -217,20 +217,20 @@ def get_history():
 def start_tunnel():
     """Start various types of reverse tunnels for SSH access"""
     data = request.get_json()
-    tunnel_type = data.get('type', 'serveo-custom')  # Use custom subdomain by default
+    tunnel_type = data.get('type', 'serveo')  # serveo, ngrok, cloudflare, localtunnel
     
     if tunnel_type in tunnel_processes:
         return jsonify({'error': f'{tunnel_type} tunnel already running', 'pid': tunnel_processes[tunnel_type]})
     
     try:
         if tunnel_type == 'serveo':
-            # Serveo.net reverse SSH tunnel - map remote port 22 to local SSH port 2222
+            # Serveo.net reverse SSH tunnel - map remote port 80 to local SSH port 2222
             cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', 
-                   '-R', '0:localhost:2222', 'serveo.net']
+                   '-R', '80:localhost:2222', 'serveo.net']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
                                      text=True, bufsize=1, universal_newlines=True)
             
-            # Store process immediately and parse URL in background
+            # Store process and start background thread to parse output
             tunnel_processes[tunnel_type] = {
                 'pid': process.pid,
                 'process': process,
@@ -240,29 +240,41 @@ def start_tunnel():
                 'status': 'connecting'
             }
             
-            # Start SSH server if not running
-            start_ssh_server()
+            # Start background thread to parse Serveo output
+            def parse_serveo_output():
+                try:
+                    for line in iter(process.stdout.readline, ''):
+                        if line:
+                            print(f\"Serveo output: {line.strip()}\")
+                            # Look for \"Forwarding HTTP traffic from https://xxx.serveousercontent.com\"
+                            import re
+                            url_match = re.search(r'https://([a-zA-Z0-9.-]+)', line)
+                            if url_match:
+                                tunnel_url = url_match.group(0)
+                                tunnel_host = url_match.group(1)
+                                
+                                # Update tunnel info
+                                if tunnel_type in tunnel_processes:
+                                    tunnel_processes[tunnel_type]['url'] = tunnel_url
+                                    tunnel_processes[tunnel_type]['host'] = tunnel_host
+                                    tunnel_processes[tunnel_type]['status'] = 'connected'
+                                    print(f\"Tunnel established: {tunnel_url}\")
+                                break
+                except Exception as e:
+                    print(f\"Error parsing Serveo output: {e}\")
             
-            # Return immediately, URL will be updated asynchronously
-            return jsonify({
-                'success': True,
-                'tunnel_type': tunnel_type,
-                'pid': process.pid,
-                'message': f'{tunnel_type} tunnel started, connecting...',
-                'ssh_port': 2222,
-                'status': 'connecting',
-                'note': 'Use /tunnel/status to get connection details once established'
-            })
+            import threading
+            threading.Thread(target=parse_serveo_output, daemon=True).start()
             
         elif tunnel_type == 'serveo-custom':
-            # Custom subdomain with serveo - use consistent subdomain
-            subdomain = data.get('subdomain', 'vercel-docker-ssh')  # Fixed subdomain
-            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/dev/null',
-                   '-R', f'{subdomain}:22:localhost:2222', 'serveo.net']
+            # Custom subdomain with serveo
+            subdomain = data.get('subdomain', 'vercel-docker-ssh')
+            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
+                   '-R', f'{subdomain}:80:localhost:2222', 'serveo.net']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            tunnel_url = f'ssh://{subdomain}.serveo.net:22'
+            tunnel_url = f'https://{subdomain}.serveo.net'
             tunnel_host = f'{subdomain}.serveo.net'
-            tunnel_port = '22'
+            tunnel_port = '80'
             
         elif tunnel_type == 'localtunnel':
             # Using localtunnel for HTTP tunnel, then SSH through it
@@ -283,9 +295,10 @@ def start_tunnel():
         tunnel_processes[tunnel_type] = {
             'pid': process.pid,
             'process': process,
-            'url': tunnel_url,
-            'host': tunnel_host,
-            'port': tunnel_port
+            'url': tunnel_url if tunnel_type == 'serveo-custom' else None,
+            'host': tunnel_host if tunnel_type == 'serveo-custom' else None,
+            'port': tunnel_port if tunnel_type == 'serveo-custom' else None,
+            'status': 'connected' if tunnel_type == 'serveo-custom' else 'connecting'
         }
         
         # Start SSH server if not running
@@ -296,19 +309,17 @@ def start_tunnel():
             'tunnel_type': tunnel_type,
             'pid': process.pid,
             'message': f'{tunnel_type} tunnel started',
-            'ssh_port': 2222
+            'ssh_port': 2222,
+            'status': 'connecting' if tunnel_type == 'serveo' else 'connected'
         }
         
-        if tunnel_url and tunnel_host:
+        if tunnel_type == 'serveo-custom':
             response_data['tunnel_url'] = tunnel_url
             response_data['tunnel_host'] = tunnel_host
-            if tunnel_port:
-                response_data['tunnel_port'] = tunnel_port
-                response_data['ssh_command'] = f'ssh -p {tunnel_port} root@{tunnel_host}'
-            else:
-                response_data['ssh_command'] = f'ssh root@{tunnel_host}'
-        elif not tunnel_url:
-            response_data['warning'] = 'Tunnel started but URL not detected. Check logs.'
+            response_data['ssh_command'] = f'ssh root@{tunnel_host}'
+            response_data['note'] = f'SSH into your container: ssh root@{tunnel_host} (password: vercel123)'
+        else:
+            response_data['note'] = 'Use /tunnel/status to get SSH connection details once tunnel establishes'
         
         return jsonify(response_data)
         
@@ -415,10 +426,19 @@ def ssh_info():
             'shelluser': 'shell123'
         },
         'connection_examples': {
-            'direct': 'ssh -p 2222 root@<tunnel-url>',
-            'with_key': 'ssh -p 2222 -i ~/.ssh/id_rsa root@<tunnel-url>',
-            'port_forward': 'ssh -p 2222 -L 8080:localhost:80 root@<tunnel-url>'
+            'via_tunnel': 'First start a tunnel, then use the provided SSH command',
+            'direct_format': 'ssh root@<tunnel-host>',
+            'with_password': 'ssh root@<tunnel-host> (then enter: vercel123)'
         },
+        'tunnel_types': {
+            'serveo': 'Random subdomain (https://xxxxx.serveousercontent.com)',
+            'serveo-custom': 'Fixed subdomain (https://vercel-docker-ssh.serveo.net)'
+        },
+        'workflow': [
+            '1. POST /tunnel/start with {"type":"serveo"} or {"type":"serveo-custom"}',
+            '2. GET /tunnel/status to check connection and get SSH command',
+            '3. Use the provided SSH command to connect'
+        ],
         'security_note': 'Change default passwords in production!'
     })
 
