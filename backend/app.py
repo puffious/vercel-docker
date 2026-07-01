@@ -230,53 +230,34 @@ def start_tunnel():
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
                                      text=True, bufsize=1, universal_newlines=True)
             
-            # Wait for tunnel URL from Serveo
-            tunnel_url = None
-            tunnel_host = None
-            tunnel_port = None
+            # Store process immediately and parse URL in background
+            tunnel_processes[tunnel_type] = {
+                'pid': process.pid,
+                'process': process,
+                'url': None,
+                'host': None,
+                'port': None,
+                'status': 'connecting'
+            }
             
-            for i in range(60):  # Wait up to 60 seconds
-                if process.poll() is not None:
-                    break
-                try:
-                    # Read output line by line
-                    line = process.stdout.readline()
-                    if line:
-                        print(f"Serveo output: {line.strip()}")
-                        # Look for forwarding info like "Forwarding SSH traffic from https://abc123.serveo.net"
-                        # Or "ssh://serveo.net:12345" format
-                        import re
-                        
-                        # Pattern 1: "Forwarding SSH traffic from https://xxx.serveo.net"
-                        url_match = re.search(r'https://([a-zA-Z0-9.-]+\.serveo\.net)', line)
-                        if url_match:
-                            tunnel_host = url_match.group(1)
-                            tunnel_url = url_match.group(0)
-                            break
-                            
-                        # Pattern 2: "tcp://serveo.net:port" or similar
-                        tcp_match = re.search(r'tcp://serveo\.net:(\d+)', line)
-                        if tcp_match:
-                            tunnel_port = tcp_match.group(1)
-                            tunnel_host = 'serveo.net'
-                            tunnel_url = f'ssh://serveo.net:{tunnel_port}'
-                            break
-                            
-                        # Pattern 3: Direct port assignment
-                        port_match = re.search(r'Allocated port (\d+) for', line)
-                        if port_match:
-                            tunnel_port = port_match.group(1)
-                            tunnel_host = 'serveo.net'
-                            tunnel_url = f'ssh://serveo.net:{tunnel_port}'
-                            break
-                except Exception as e:
-                    print(f"Error reading Serveo output: {e}")
-                time.sleep(0.5)
+            # Start SSH server if not running
+            start_ssh_server()
+            
+            # Return immediately, URL will be updated asynchronously
+            return jsonify({
+                'success': True,
+                'tunnel_type': tunnel_type,
+                'pid': process.pid,
+                'message': f'{tunnel_type} tunnel started, connecting...',
+                'ssh_port': 2222,
+                'status': 'connecting',
+                'note': 'Use /tunnel/status to get connection details once established'
+            })
             
         elif tunnel_type == 'serveo-custom':
             # Custom subdomain with serveo
             subdomain = data.get('subdomain', f'vercel-{uuid.uuid4().hex[:8]}')
-            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
+            cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/dev/null',
                    '-R', f'{subdomain}:22:localhost:2222', 'serveo.net']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             tunnel_url = f'ssh://{subdomain}.serveo.net:22'

@@ -1,6 +1,5 @@
 class WebTerminal {
-    constructor(containerId) {
-        this.container = document.getElementById(containerId);
+    constructor() {
         this.sessionId = null;
         this.commandHistory = [];
         this.historyIndex = -1;
@@ -10,72 +9,45 @@ class WebTerminal {
     }
 
     init() {
-        this.createTerminalElements();
+        this.output = document.getElementById('output');
+        this.input = document.getElementById('commandInput');
+        this.prompt = document.getElementById('prompt');
+        this.loading = document.getElementById('loading');
+        
+        if (!this.output || !this.input || !this.prompt) {
+            console.error('Terminal elements not found!');
+            return;
+        }
+        
         this.bindEvents();
         this.displayWelcome();
         this.focusInput();
     }
 
-    createTerminalElements() {
-        this.container.innerHTML = `
-            <div class="terminal-header">
-                <div class="terminal-controls">
-                    <span class="control-btn close"></span>
-                    <span class="control-btn minimize"></span>
-                    <span class="control-btn maximize"></span>
-                </div>
-                <div class="terminal-title">Terminal - Vercel Shell</div>
-            </div>
-            <div class="terminal-body">
-                <div id="terminal-output" class="terminal-output"></div>
-                <div class="terminal-input-line">
-                    <span id="terminal-prompt" class="terminal-prompt">user@vercel-shell:~$ </span>
-                    <input type="text" id="terminal-input" class="terminal-input" autocomplete="off" spellcheck="false">
-                </div>
-            </div>
-        `;
-
-        this.output = document.getElementById('terminal-output');
-        this.input = document.getElementById('terminal-input');
-        this.prompt = document.getElementById('terminal-prompt');
-    }
-
     bindEvents() {
         this.input.addEventListener('keydown', (e) => this.handleKeydown(e));
-        this.input.addEventListener('keyup', (e) => this.handleKeyup(e));
         
         // Focus input when clicking anywhere in terminal
-        this.container.addEventListener('click', () => this.focusInput());
-        
-        // Handle paste
-        this.input.addEventListener('paste', (e) => {
-            setTimeout(() => this.handleAutocomplete(), 0);
-        });
+        document.addEventListener('click', () => this.focusInput());
     }
 
     handleKeydown(e) {
-        switch(e.key) {
+        switch (e.key) {
             case 'Enter':
                 e.preventDefault();
                 this.executeCommand();
                 break;
             case 'ArrowUp':
                 e.preventDefault();
-                this.navigateHistory('up');
+                this.navigateHistory(-1);
                 break;
             case 'ArrowDown':
                 e.preventDefault();
-                this.navigateHistory('down');
+                this.navigateHistory(1);
                 break;
             case 'Tab':
                 e.preventDefault();
                 this.handleTabCompletion();
-                break;
-            case 'c':
-                if (e.ctrlKey) {
-                    e.preventDefault();
-                    this.handleCtrlC();
-                }
                 break;
             case 'l':
                 if (e.ctrlKey) {
@@ -86,31 +58,23 @@ class WebTerminal {
         }
     }
 
-    handleKeyup(e) {
-        // Auto-suggest as user types (debounced)
-        clearTimeout(this.autocompleteTimeout);
-        this.autocompleteTimeout = setTimeout(() => {
-            if (e.key !== 'Tab' && e.key !== 'Enter' && !e.key.startsWith('Arrow')) {
-                this.handleAutocomplete();
-            }
-        }, 300);
-    }
-
     async executeCommand() {
         const command = this.input.value.trim();
         if (!command) return;
-
-        // Add command to history
+        
+        // Add to history
         this.commandHistory.push(command);
         this.historyIndex = this.commandHistory.length;
-
-        // Display command in output
-        this.appendOutput(`${this.prompt.textContent}${command}`, 'command');
+        
+        // Display command
+        this.appendOutput(`${this.prompt.textContent} ${command}`, 'terminal-command');
         
         // Clear input
         this.input.value = '';
-        this.input.disabled = true;
-
+        
+        // Show loading
+        this.showLoading(true);
+        
         try {
             const response = await fetch('/shell', {
                 method: 'POST',
@@ -122,149 +86,109 @@ class WebTerminal {
                     session_id: this.sessionId
                 })
             });
-
+            
             const result = await response.json();
-
-            if (response.ok) {
-                // Update session info
-                if (result.session_id) {
-                    this.sessionId = result.session_id;
-                }
-                if (result.prompt) {
-                    this.prompt.textContent = result.prompt;
-                }
-                if (result.cwd) {
-                    this.currentDirectory = result.cwd;
-                }
-
-                // Display output
-                if (result.stdout) {
-                    this.appendOutput(result.stdout, 'output');
-                }
-                if (result.stderr) {
-                    this.appendOutput(result.stderr, 'error');
-                }
-                if (result.return_code !== 0 && !result.stderr) {
-                    this.appendOutput(`Command exited with code: ${result.return_code}`, 'error');
-                }
-            } else {
-                this.appendOutput(`Error: ${result.error || 'Unknown error'}`, 'error');
+            
+            if (result.session_id) {
+                this.sessionId = result.session_id;
             }
+            
+            if (result.output) {
+                this.appendOutput(result.output, result.success ? 'terminal-result' : 'terminal-error');
+            }
+            
+            if (result.cwd) {
+                this.currentDirectory = result.cwd;
+                this.updatePrompt();
+            }
+            
         } catch (error) {
-            this.appendOutput(`Network error: ${error.message}`, 'error');
+            this.appendOutput(`Error: ${error.message}`, 'terminal-error');
         } finally {
-            this.input.disabled = false;
+            this.showLoading(false);
             this.focusInput();
         }
     }
 
-    async handleTabCompletion() {
-        const command = this.input.value;
-        if (!command.trim()) return;
-
-        try {
-            const response = await fetch('/shell/autocomplete', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    command: command,
-                    session_id: this.sessionId
-                })
-            });
-
-            const result = await response.json();
-            if (result.suggestions && result.suggestions.length > 0) {
-                if (result.suggestions.length === 1) {
-                    // Single match - complete it
-                    const suggestion = result.suggestions[0];
-                    const parts = command.split(' ');
-                    parts[parts.length - 1] = suggestion;
-                    this.input.value = parts.join(' ') + ' ';
-                } else {
-                    // Multiple matches - show them
-                    this.appendOutput(result.suggestions.join('  '), 'suggestion');
-                }
-            }
-        } catch (error) {
-            // Silently fail autocomplete
-        }
-    }
-
-    handleAutocomplete() {
-        // Visual feedback for potential completions could go here
-    }
-
     navigateHistory(direction) {
         if (this.commandHistory.length === 0) return;
-
-        if (direction === 'up') {
-            if (this.historyIndex > 0) {
-                this.historyIndex--;
-                this.input.value = this.commandHistory[this.historyIndex];
-            }
-        } else if (direction === 'down') {
-            if (this.historyIndex < this.commandHistory.length - 1) {
-                this.historyIndex++;
-                this.input.value = this.commandHistory[this.historyIndex];
-            } else {
-                this.historyIndex = this.commandHistory.length;
-                this.input.value = '';
-            }
-        }
-    }
-
-    handleCtrlC() {
-        this.appendOutput('^C', 'control');
-        this.input.value = '';
-    }
-
-    clearTerminal() {
-        this.output.innerHTML = '';
-        this.displayWelcome();
-    }
-
-    appendOutput(text, type = 'output') {
-        const div = document.createElement('div');
-        div.className = `terminal-line terminal-${type}`;
         
-        // Handle ANSI escape sequences for clear screen
-        if (text.includes('\033[2J\033[H')) {
-            this.clearTerminal();
+        if (direction === -1 && this.historyIndex > 0) {
+            this.historyIndex--;
+        } else if (direction === 1 && this.historyIndex < this.commandHistory.length - 1) {
+            this.historyIndex++;
+        } else if (direction === 1 && this.historyIndex === this.commandHistory.length - 1) {
+            this.historyIndex = this.commandHistory.length;
+            this.input.value = '';
             return;
         }
         
-        div.textContent = text;
-        this.output.appendChild(div);
+        if (this.historyIndex >= 0 && this.historyIndex < this.commandHistory.length) {
+            this.input.value = this.commandHistory[this.historyIndex];
+        }
+    }
+
+    handleTabCompletion() {
+        const command = this.input.value;
+        const commonCommands = ['ls', 'cd', 'pwd', 'mkdir', 'rm', 'cat', 'echo', 'ps', 'top', 'htop', 'ssh', 'curl'];
+        
+        const matches = commonCommands.filter(cmd => cmd.startsWith(command));
+        if (matches.length === 1) {
+            this.input.value = matches[0] + ' ';
+        }
+    }
+
+    appendOutput(text, className = '') {
+        const line = document.createElement('div');
+        line.className = `terminal-line ${className}`;
+        line.textContent = text;
+        this.output.appendChild(line);
         this.scrollToBottom();
     }
 
-    scrollToBottom() {
-        this.output.scrollTop = this.output.scrollHeight;
+    displayWelcome() {
+        this.appendOutput('╔═══════════════════════════════════════════════╗', 'terminal-welcome');
+        this.appendOutput('║         Vercel Web Terminal - SSH Ready      ║', 'terminal-welcome');
+        this.appendOutput('╚═══════════════════════════════════════════════╝', 'terminal-welcome');
+        this.appendOutput('', '');
+        this.appendOutput('SSH Server: Running on port 2222', 'terminal-welcome');
+        this.appendOutput('Type commands and press Enter. Ctrl+L to clear.', 'terminal-welcome');
+        this.appendOutput('', '');
+    }
+
+    updatePrompt() {
+        const shortDir = this.currentDirectory.replace(/\/home\/[^\/]+/, '~');
+        this.prompt.textContent = `${this.username}@vercel:${shortDir}$ `;
+    }
+
+    showLoading(show) {
+        if (this.loading) {
+            this.loading.classList.toggle('active', show);
+        }
     }
 
     focusInput() {
-        this.input.focus();
+        if (this.input) {
+            this.input.focus();
+        }
     }
 
-    displayWelcome() {
-        const welcomeMessages = [
-            '🚀 Welcome to Vercel Web Shell!',
-            '📦 Docker container running Ubuntu 22.04',
-            '💡 Features: persistent sessions, command history, tab completion',
-            '⚡ Use Ctrl+L to clear, Ctrl+C to cancel, ↑/↓ for history',
-            '🔒 Security: Commands run in isolated container environment',
-            ''
-        ];
+    scrollToBottom() {
+        if (this.output) {
+            this.output.scrollTop = this.output.scrollHeight;
+        }
+    }
 
-        welcomeMessages.forEach(msg => {
-            this.appendOutput(msg, 'welcome');
-        });
+    clearTerminal() {
+        if (this.output) {
+            this.output.innerHTML = '';
+            this.displayWelcome();
+        }
     }
 }
 
-// Initialize terminal when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    window.terminal = new WebTerminal('terminal-container');
+// Initialize terminal when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Initializing terminal...');
+    window.terminal = new WebTerminal();
 });
