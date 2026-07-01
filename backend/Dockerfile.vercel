@@ -30,7 +30,7 @@ RUN apt-get update && \
         # Network tools  
         net-tools \
         iputils-ping \
-        netcat \
+        netcat-openbsd \
         socat \
         # File utilities
         zip \
@@ -44,7 +44,7 @@ RUN apt-get update && \
         # Text processing
         grep \
         sed \
-        awk \
+        gawk \
         # System monitoring
         procps \
         psmisc \
@@ -54,7 +54,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Configure SSH server
-RUN mkdir /var/run/sshd && \
+RUN mkdir -p /var/run/sshd && \
     # Create SSH host keys
     ssh-keygen -A && \
     # Configure SSH for container use
@@ -67,12 +67,9 @@ RUN mkdir /var/run/sshd && \
     echo 'X11Forwarding yes' >> /etc/ssh/sshd_config
 
 # Set up users and SSH access
-RUN # Set root password (change this!)
-    echo 'root:vercel123' | chpasswd && \
-    # Create a regular user
+RUN echo 'root:vercel123' | chpasswd && \
     useradd -m -s /bin/bash -G sudo shelluser && \
     echo 'shelluser:shell123' | chpasswd && \
-    # Set up SSH keys directory
     mkdir -p /root/.ssh /home/shelluser/.ssh && \
     chmod 700 /root/.ssh /home/shelluser/.ssh
 
@@ -95,14 +92,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Install additional tunnel tools
-RUN # Install Node.js for localtunnel
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y nodejs && \
-    # Install cloudflared (optional)
-    wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && \
-    dpkg -i cloudflared-linux-amd64.deb || apt-get install -f -y && \
-    rm cloudflared-linux-amd64.deb
+# Install additional tunnel tools (optional - may fail on some systems)
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs || echo "Node.js installation failed - continuing without localtunnel support"
 
 # Copy the application code into the container
 COPY . .
