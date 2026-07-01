@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vercel Web Shell POC</title>
+    <style>
+        body {
+            font-family: monospace, sans-serif;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            margin: 20px;
+            padding: 0;
+        }
+        #terminal-container {
+            max-width: 900px;
+            margin: 0 auto;
+            border: 1px solid #007acc;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #0c0c0c;
+            box-shadow: 0 0 15px rgba(0, 122, 204, 0.5);
+        }
+        #output {
+            background-color: #0c0c0c;
+            color: #00ff00; /* Green text for output */
+            padding: 15px;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border-bottom: 1px solid #007acc;
+        }
+        #command-form {
+            display: flex;
+            padding: 10px 15px;
+            background-color: #1f1f1f;
+            border-top: 1px solid #333;
+        }
+        #command-input {
+            flex-grow: 1;
+            background-color: #2a2a2a;
+            color: #d4d4d4;
+            border: 1px solid #007acc;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 1em;
+            outline: none;
+        }
+        #command-input:focus {
+            border-color: #00aaff;
+            box-shadow: 0 0 5px rgba(0, 170, 255, 0.5);
+        }
+        #command-form button {
+            background-color: #007acc;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            margin-left: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.2s;
+        }
+        #command-form button:hover {
+            background-color: #005a92;
+        }
+        #command-form button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+        .prompt {
+            color: #00aaff; /* Blue for prompt */
+        }
+        .error {
+            color: #ff4500; /* Orange-red for errors */
+        }
+        .info {
+            color: #ffa500; /* Orange for info */
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal-container">
+        <pre id="output"></pre>
+        <form id="command-form">
+            <span class="prompt">$</span>&nbsp;<input type="text" id="command-input" placeholder="Enter command..." autofocus>
+            <button type="submit" id="run-button">Run</button>
+        </form>
+    </div>
+
+    <script>
+        const outputElement = document.getElementById('output');
+        const commandInput = document.getElementById('command-input');
+        const commandForm = document.getElementById('command-form');
+        const runButton = document.getElementById('run-button');
+
+        function appendOutput(type, message) {
+            const span = document.createElement('span');
+            span.className = type;
+            span.textContent = message + '\n';
+            outputElement.appendChild(span);
+            outputElement.scrollTop = outputElement.scrollHeight; // Auto-scroll to bottom
+        }
+
+        commandForm.addEventListener('submit', async (event) => {
+            event.preventDefault(); // Prevent page reload
+            const command = commandInput.value.trim();
+
+            if (!command) {
+                return;
+            }
+
+            appendOutput('prompt', `$ ${command}`); // Show the command run
+
+            commandInput.value = ''; // Clear input
+            commandInput.disabled = true;
+            runButton.disabled = true;
+            runButton.textContent = 'Running...';
+
+            try {
+                const response = await fetch('/shell', { // Route to backend's /shell endpoint
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ command: command })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.stdout) {
+                        appendOutput('output', data.stdout);
+                    }
+                    if (data.stderr) {
+                        appendOutput('error', `STDERR:\n${data.stderr}`);
+                    }
+                    if (data.return_code !== 0) {
+                        appendOutput('error', `Command exited with code: ${data.return_code}`);
+                    }
+                } else {
+                    appendOutput('error', `Server Error: ${data.error || 'Unknown error'}`);
+                    appendOutput('error', `HTTP Status: ${response.status}`);
+                }
+            } catch (error) {
+                appendOutput('error', `Network or Parse Error: ${error.message}`);
+            } finally {
+                commandInput.disabled = false;
+                runButton.disabled = false;
+                runButton.textContent = 'Run';
+                commandInput.focus(); // Focus input for next command
+            }
+        });
+
+        // Initial info message
+        document.addEventListener('DOMContentLoaded', () => {
+            appendOutput('info', 'Welcome to the Vercel Web Shell POC!');
+            appendOutput('info', 'Enter commands and press Enter or click Run.');
+            appendOutput('info', 'Remember: This is NOT a real SSH session. Commands are stateless and ephemeral.');
+            commandInput.focus();
+        });
+    </script>
+</body>
+</html>
